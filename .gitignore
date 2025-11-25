@@ -8,7 +8,7 @@ key.json  # หากใช้ Google Service Account Keys อื่นๆ
 # 2. ไฟล์ข้อมูลดิบ (Raw Data)
 # ป้องกันไม่ให้ไฟล์ขนาดใหญ่ถูก commit เข้า Git
 # (ใส่ชื่อไฟล์ที่คุณดาวน์โหลดมาจาก Kaggle เช่น)
-*.csv
+TMDB_movies.csv
 *.json
 *.zip
 data/
