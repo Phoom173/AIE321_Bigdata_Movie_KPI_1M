@@ -1,9 +1,10 @@
 # publish.py
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
+import psycopg2
 
 # นำเข้าไลบรารีสำหรับ Google Sheets
 import gspread
@@ -14,12 +15,7 @@ PRODUCTION_TABLE_NAME = 'movie_facts'
 PRODUCTION_SCHEMA_NAME = 'production'
 GOOGLE_SHEET_TITLE = 'Kaggle Data Pipeline Report' 
 WORKSHEET_NAME = 'Final Data' 
-
-# 🚨 เปลี่ยนชื่อไฟล์ credentials ให้ตรงกับไฟล์ที่คุณดาวน์โหลดมา
-CREDENTIALS_FILE = 'client_secret.json' 
-# เพิ่มไฟล์สำหรับเก็บ Token อัตโนมัติหลังการล็อกอินครั้งแรก
-STORAGE_FILE = 'gspread_oauth_storage.json'
-
+CREDENTIALS_FILE = 'credentials.json' 
 
 def run_publication_pipeline():
     """
@@ -29,19 +25,21 @@ def run_publication_pipeline():
     load_dotenv()
 
     # ดึงค่าการเชื่อมต่อจาก .env (สำคัญ: ใช้ DB_HOST=localhost และ DB_PORT=6666)
-    DB_HOST = os.getenv("DB_HOST")
-    DB_USER = os.getenv("POSTGRES_USER")
-    DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-    DB_NAME = os.getenv("POSTGRES_DB")
-    DB_PORT = os.getenv("DB_PORT")
+    DB_USER = 'DB_AIE321_BIG_DATA'
+    DB_PASSWORD = '321bigdatawork'
+    DB_HOST = 'localhost' 
+    DB_PORT = '6666'      
+    DB_NAME = 'AIE321' 
 
     # --- 2. การเชื่อมต่อฐานข้อมูล (ส่วนนี้ไม่มีการเปลี่ยนแปลง) ---
     try:
+        # สร้าง Connection String
         conn_string = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
         engine = create_engine(conn_string)
 
         print(f"--- เริ่มดึงข้อมูลจาก {PRODUCTION_SCHEMA_NAME}.{PRODUCTION_TABLE_NAME} (Host: {DB_HOST}:{DB_PORT}) ---")
         
+        # ดึงข้อมูลที่แปลงแล้วจาก Production Schema
         sql_query = f"SELECT * FROM {PRODUCTION_SCHEMA_NAME}.{PRODUCTION_TABLE_NAME};"
         final_df = pd.read_sql(sql_query, con=engine)
         

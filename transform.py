@@ -1,18 +1,18 @@
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
-import json
 from ast import literal_eval
 import numpy as np
-# 🚨 ใช้ psycopg2 และ StringIO สำหรับ Bulk Copy
 import psycopg2 
 from io import StringIO
+from pandas.io import sql as pd_sql
+import json 
 
-# --- 1. ตั้งค่าการเชื่อมต่อฐานข้อมูล (ใช้ค่าเดียวกัน) ---
+# --- 1. ตั้งค่าการเชื่อมต่อฐานข้อมูล ---
 DB_USER = 'DB_AIE321_BIG_DATA'
 DB_PASSWORD = '321bigdatawork'
 DB_HOST = 'localhost' 
-DB_PORT = '6666'      
+DB_PORT = '6666'
 DB_NAME = 'AIE321' 
 
 # ตั้งค่า Schema และ Table
@@ -22,28 +22,34 @@ PRODUCTION_SCHEMA = 'production'
 MOVIE_FACTS_TABLE = 'movie_facts'
 GENRE_SUMMARY_TABLE = 'genre_average_revenue'
 
-# Connection string สำหรับ psycopg2 โดยตรง
 CONN_STRING = f"dbname={DB_NAME} user={DB_USER} password={DB_PASSWORD} host={DB_HOST} port={DB_PORT}"
 FULL_FACTS_TABLE = f'"{PRODUCTION_SCHEMA}"."{MOVIE_FACTS_TABLE}"'
 FULL_GENRE_TABLE = f'"{PRODUCTION_SCHEMA}"."{GENRE_SUMMARY_TABLE}"'
 
-# --- 2. ฟังก์ชันช่วยในการจัดการ JSON/Array ---
+# --- 2. ฟังก์ชันช่วยในการจัดการ JSON/Array (แก้ไขให้รองรับ CSV String) ---
 def parse_and_extract_names(json_string):
-    """แปลง JSON string เป็น List ของชื่อ (e.g., genre names)"""
-    if pd.isna(json_string) or json_string == '[]' or json_string == '':
+    """แปลง String ที่เป็น Comma-Separated Values (CSV) ให้เป็น List ของชื่อ"""
+    if pd.isna(json_string) or not isinstance(json_string, str) or json_string.strip() == '':
         return []
-    try:
-        list_of_dicts = literal_eval(json_string)
-        if isinstance(list_of_dicts, list) and all(isinstance(d, dict) for d in list_of_dicts):
-            return [d.get('name') or d.get('iso_3166_1', 'Unknown') for d in list_of_dicts]
-    except (ValueError, SyntaxError):
-        pass
-    return []
+    
+    # 🚨 แก้ไขให้รองรับ CSV String
+    # 1. ลบช่องว่างนำ/ตาม
+    # 2. แยก String ด้วยเครื่องหมายคอมมา
+    # 3. ลบช่องว่างนำ/ตามของแต่ละชื่อที่ได้
+    names = [name.strip() for name in json_string.split(',')]
+    
+    # กรองค่าว่างที่อาจเกิดจากการแยก
+    return [name for name in names if name]
 
-# --- 3. ฟังก์ชันช่วยในการสร้างตารางและ Bulk Copy (ใช้ในการเขียนข้อมูลกลับ) ---
+# **หมายเหตุ:** คุณอาจต้องแก้ไขฟังก์ชันนี้ในคอลัมน์อื่น ๆ เช่น `cast`, `production_companies`, ฯลฯ ด้วย ถ้าคอลัมน์เหล่านั้นมีรูปแบบเป็น CSV String เช่นกัน
+# ถ้าคอลัมน์อื่นยังเป็น JSON String คุณต้องเขียนฟังก์ชันแยกหรือรวม logic การตรวจสอบ JSON/CSV
+# แต่สำหรับ 'genres' เราใช้ CSV logic แน่นอน
+
+# ... ส่วนอื่น ๆ ของโค้ด transform.py ...
+
+# --- 3. ฟังก์ชันช่วยในการสร้างตารางและ Bulk Copy ---
 def create_table_and_bulk_copy(engine, conn_string, df, table_name_unquoted, table_name_quoted, schema_name):
     """สร้างตารางเปล่าและโหลดข้อมูลด้วย COPY EXPERT"""
-    from pandas.io import sql as pd_sql 
     
     try:
         # A. ใช้ Pandas สร้างคำสั่ง CREATE TABLE (DDL)
@@ -62,7 +68,6 @@ def create_table_and_bulk_copy(engine, conn_string, df, table_name_unquoted, tab
         
         # C. โหลดข้อมูลด้วย Bulk Copy
         buffer = StringIO()
-        # ใช้ tab (\t) เป็นตัวคั่น
         df.to_csv(buffer, index=False, header=False, sep='\t', encoding='utf-8') 
         buffer.seek(0)
         
@@ -79,31 +84,23 @@ def create_table_and_bulk_copy(engine, conn_string, df, table_name_unquoted, tab
         print(f"[ERROR] Bulk Copy to {schema_name}.{table_name_unquoted} Failed: {e}")
         raise
 
-
 # --- 4. ฟังก์ชันหลักในการแปลงข้อมูล (The Refinery) ---
 def transform_data():
     try:
-        # 1. สร้าง Engine สำหรับการจัดการ DDL (Create Table, Drop Table)
+        # 1. สร้าง Engine และ Schema Production
         engine = create_engine(f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}')
-        
-        # 2. สร้าง Schema Production (ถ้ายังไม่มี)
         with engine.begin() as conn:
             conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {PRODUCTION_SCHEMA}"))
             print(f"[SUCCESS] Schema '{PRODUCTION_SCHEMA}' ถูกสร้างเรียบร้อยแล้ว")
         
-        # 3. อ่านข้อมูลดิบ (ใช้ psycopg2 ในการอ่าน)
-        print(f"กำลังอ่านข้อมูลดิบจาก {RAW_SCHEMA}.{RAW_TABLE} โดยใช้ psycopg2...")
-        
+        # 2. อ่านข้อมูลดิบ
+        print(f"กำลังอ่านข้อมูลดิบจาก {RAW_SCHEMA}.{RAW_TABLE}...")
         with psycopg2.connect(CONN_STRING) as conn:
             query = f"SELECT * FROM {RAW_SCHEMA}.{RAW_TABLE}"
             df = pd.read_sql_query(query, con=conn) 
-        
         print(f"[SUCCESS] อ่านข้อมูลเสร็จสิ้น จำนวนแถว: {len(df):,}")
         
-        # --- 4. Data Cleaning และ Feature Engineering ---
-        print("กำลังแปลงคอลัมน์ Genres, Production Countries, Cast, Director และ Writers...")
-        
-        # ... (ส่วนการทำ Data Cleaning ยังคงเดิม) ...
+        # 3. Data Cleaning และ Feature Engineering
         json_cols = ['genres', 'production_countries', 'production_companies', 'spoken_languages', 'cast', 'writers', 'producers']
         for col in json_cols:
             df[f'{col}_list'] = df[col].astype(str).apply(parse_and_extract_names)
@@ -123,31 +120,44 @@ def transform_data():
         ]
         df_facts = df[movie_facts_cols].copy()
         
-        # --- 5. โหลดตารางหลัก: production.movie_facts (ใช้ Bulk Copy) ---
+        # 4. โหลดตารางหลัก: production.movie_facts
         print(f"กำลังโหลดตารางหลัก {PRODUCTION_SCHEMA}.{MOVIE_FACTS_TABLE} ด้วย Bulk Copy...")
-        
-        # ต้องแปลงคอลัมน์ List ให้เป็น String ก่อนทำ Bulk Copy
         df_facts_copy = df_facts.copy()
+        # แปลงคอลัมน์ List เป็น String ก่อน Bulk Copy
         df_facts_copy['genres_list'] = df_facts_copy['genres_list'].apply(lambda x: '[' + ','.join(map(str, x)) + ']')
         df_facts_copy['production_countries_list'] = df_facts_copy['production_countries_list'].apply(lambda x: '[' + ','.join(map(str, x)) + ']')
         
         create_table_and_bulk_copy(engine, CONN_STRING, df_facts_copy, MOVIE_FACTS_TABLE, FULL_FACTS_TABLE, PRODUCTION_SCHEMA)
         print(f"[SUCCESS] โหลดตารางหลักสำเร็จ! ตาราง: {PRODUCTION_SCHEMA}.{MOVIE_FACTS_TABLE}")
 
-        # --- 6. Aggregation: สรุปรายได้เฉลี่ยตาม Genres (ตอบโจทย์ Q1) ---
+        # --- 5. Aggregation: สรุปรายได้เฉลี่ยตาม Genres (แก้ไขปัญหา 0 Rows) ---
         print("กำลังสรุปและโหลดตารางสรุปรายได้เฉลี่ยตาม Genres...")
         
+        # 5.1 Explode Genres
         df_exploded = df_facts.explode('genres_list')
-        df_filtered = df_exploded[(df_exploded['revenue'] > 0) & (df_exploded['budget'] > 0) & (df_exploded['genres_list'].notna())].copy()
         
-        df_genre_summary = df_filtered.groupby('genres_list').agg(
-            average_revenue=('revenue', 'mean'),
-            total_movies=('movie_fact_id', 'count')
-        ).reset_index().rename(columns={'genres_list': 'genre_name'})
+        # 5.2 กรองข้อมูล (ใช้เงื่อนไขที่ผ่อนปรน)
+        df_filtered = df_exploded[
+            (df_exploded['revenue'].notna()) & 
+            (df_exploded['revenue'] > 0) & 
+            # 🚨 นำเงื่อนไข budget > 0 ออก เพื่อให้มีข้อมูลเหลือ
+            (df_exploded['genres_list'].notna()) &
+            (df_exploded['genres_list'] != '') 
+        ].copy()
         
-        df_genre_summary = df_genre_summary.sort_values(by='average_revenue', ascending=False)
+        # 5.3 คำนวณ GroupBy
+        if len(df_filtered) == 0:
+            print("[WARNING] หลังการกรองข้อมูล Genre Summary ยังคงไม่พบแถวที่ตรงตามเงื่อนไข (Revenue > 0).")
+            df_genre_summary = pd.DataFrame(columns=['genre_name', 'average_revenue', 'total_movies'])
+        else:
+            df_genre_summary = df_filtered.groupby('genres_list').agg(
+                average_revenue=('revenue', 'mean'),
+                total_movies=('movie_fact_id', 'count')
+            ).reset_index().rename(columns={'genres_list': 'genre_name'})
+            
+            df_genre_summary = df_genre_summary.sort_values(by='average_revenue', ascending=False)
         
-        # 7. โหลดตารางสรุป (ใช้ Bulk Copy)
+        # 5.4 โหลดตารางสรุป
         create_table_and_bulk_copy(engine, CONN_STRING, df_genre_summary, GENRE_SUMMARY_TABLE, FULL_GENRE_TABLE, PRODUCTION_SCHEMA)
         print(f"[SUCCESS] โหลดตารางสรุป Genres สำเร็จ! ตาราง: {PRODUCTION_SCHEMA}.{GENRE_SUMMARY_TABLE}")
 
@@ -156,6 +166,25 @@ def transform_data():
         print(e)
     except Exception as e:
         print(f"[ERROR] เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุในขั้นตอน Transformation: {e}")
+    df_facts = df[movie_facts_cols].copy()
+
+    # 🚨 เพิ่มส่วนการกรองแถวที่ไม่สมบูรณ์ (Filtering Incomplete Rows) 🚨
+    print("กำลังทำการกรองแถวที่ไม่สมบูรณ์...")
+    """
+    # กรองแถวที่มีค่าว่าง (NaN) หรือ 0 ในคอลัมน์สำคัญ
+    df_facts_filtered = df_facts[
+        (df_facts['revenue'].notna()) & (df_facts['revenue'] > 0) & # รายได้ต้องมีค่าและมากกว่า 0
+        (df_facts['budget'].notna()) & (df_facts['budget'] > 0) &   # งบประมาณต้องมีค่าและมากกว่า 0
+        (df_facts['genres_list'].apply(lambda x: bool(x))) &        # genres_list ต้องไม่เป็น List ว่าง
+        (df_facts['release_year'].notna())                          # ปีที่ออกฉายต้องมี
+    ].copy()
+
+    # เปลี่ยน df_facts ให้เป็น df_facts_filtered เพื่อใช้ในการโหลดตาราง Fact และ Aggregation
+    print(f"[SUCCESS] กรองข้อมูลเสร็จสิ้น จำนวนแถวที่เหลือ: {len(df_facts_filtered):,}")
+
+    # 🚨 เปลี่ยนตัวแปร df_facts เป็น df_facts_filtered ในโค้ดที่เหลือ 🚨
+    df_facts = df_facts_filtered
+    # ... (ส่วนการโหลดตารางหลัก: production.movie_facts (ใช้ df_facts_copy)) ..."""
 
 if __name__ == "__main__":
     transform_data()
