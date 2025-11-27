@@ -15,7 +15,7 @@ DB_NAME = 'AIE321'
 # ตั้งค่าปลายทาง: 🚨 ใช้ชื่อเดิม (ตัวพิมพ์เล็ก) แต่ตอนนี้จะถูกอ้างอิงอย่างถูกต้อง
 SCHEMA_NAME = 'raw_data' 
 TABLE_NAME = 'tmdb_movies_raw' 
-CSV_FILE_PATH = 'D:\AIE321\Big_Data\TMDB_movies.csv' 
+CSV_FILE_PATH = 'D:AIE321\PJ\AIE321_Bigdata_Movie_KPI_1M\TMDB_movies.csv' 
 
 # ใช้ชื่อตารางเดียว: Unquoted Name (ใช้ในการแสดงผลและ drop table)
 FULL_TABLE_NAME = f"{SCHEMA_NAME}.{TABLE_NAME}"
