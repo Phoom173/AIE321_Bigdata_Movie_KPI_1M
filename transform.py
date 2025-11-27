@@ -132,6 +132,44 @@ def transform_data():
         create_table_and_bulk_copy(engine, CONN_STRING, df_facts_copy, MOVIE_FACTS_TABLE, FULL_FACTS_TABLE, PRODUCTION_SCHEMA)
         print(f"[SUCCESS] โหลดตารางหลักสำเร็จ! ตาราง: {PRODUCTION_SCHEMA}.{MOVIE_FACTS_TABLE}")
 
+        # --- 4.5 โหลดตาราง Fact สำหรับ Visualization ตาม Genre (Exploded Fact Table) ---
+        
+        # 1. Explode Genres จาก df_facts ที่ถูกกรองแล้ว
+        df_exploded = df_facts.explode('genres_list') 
+        
+        # 2. กรองเฉพาะแถวที่มี Genre จริงๆ
+        df_exploded = df_exploded[
+            (df_exploded['genres_list'].notna()) & 
+            (df_exploded['genres_list'] != '')
+        ].copy()
+        
+        # 3. เลือกคอลัมน์ที่ต้องการสำหรับตาราง Fact ใหม่
+        # *** เลือกคอลัมน์ที่จำเป็นเท่านั้น เพื่อลดขนาดตารางที่จะส่งขึ้น Google Sheets ***
+        df_genre_fact = df_exploded[[
+            'movie_fact_id', 
+            'title',
+            'release_year',
+            'revenue', 
+            'budget', 
+            'imdb_rating', 
+            'popularity', 
+            'genres_list'
+        ]].rename(columns={'genres_list': 'genre_name'}).copy()
+        
+        # 4. โหลดตารางใหม่เข้า Postgres
+        GENRE_FACT_TABLE_NAME = 'movie_genre_fact'
+        FULL_GENRE_FACT_TABLE = f'"{PRODUCTION_SCHEMA}"."{GENRE_FACT_TABLE_NAME}"'
+        
+        create_table_and_bulk_copy(
+            engine, 
+            CONN_STRING, 
+            df_genre_fact, 
+            GENRE_FACT_TABLE_NAME, 
+            FULL_GENRE_FACT_TABLE, 
+            PRODUCTION_SCHEMA
+        )
+        print(f"[SUCCESS] โหลดตาราง Fact แยก Genre สำเร็จ! ตาราง: {PRODUCTION_SCHEMA}.{GENRE_FACT_TABLE_NAME} (ใช้สำหรับ Looker Studio)")
+
         # --- 5. Aggregation: สรุปรายได้เฉลี่ยตาม Genres (ใช้ df_facts ที่ถูกกรองแล้ว) ---
         print("กำลังสรุปและโหลดตารางสรุปรายได้เฉลี่ยตาม Genres...")
         
